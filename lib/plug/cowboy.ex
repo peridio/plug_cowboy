@@ -109,7 +109,7 @@ defmodule Plug.Cowboy do
         log_exceptions_with_status_code: [400..599]
 
   By default, `Plug.Cowboy` includes the entire `conn` to the log metadata for exceptions.
-  However, this metadata may contain sensitive information such as security headers or 
+  However, this metadata may contain sensitive information such as security headers or
   cookies, which may be logged in plain text by certain logging backends. To prevent this,
   you can configure the `:conn_in_exception_metadata` option to not include the `conn` in the metadata.
 
@@ -136,7 +136,7 @@ defmodule Plug.Cowboy do
 
   ## WebSocket support
 
-  Plug.Cowboy supports upgrading HTTP requests to WebSocket connections via 
+  Plug.Cowboy supports upgrading HTTP requests to WebSocket connections via
   the use of the `Plug.Conn.upgrade_adapter/3` function, called with `:websocket` as the second
   argument. Applications should validate that the connection represents a valid WebSocket request
   before calling this function (Cowboy will validate the connection as part of the upgrade
@@ -252,6 +252,7 @@ defmodule Plug.Cowboy do
 
   """
   def child_spec(opts) do
+    Logger.error("child_spec: #{inspect(opts)}")
     scheme = Keyword.fetch!(opts, :scheme)
 
     {plug, plug_opts} =
@@ -267,7 +268,7 @@ defmodule Plug.Cowboy do
       |> Kernel.++(Keyword.get(opts, :options, []))
 
     cowboy_args = args(scheme, plug, plug_opts, cowboy_opts)
-    [ref, transport_opts, proto_opts] = cowboy_args
+    [ref, transport_opts, protocol, protocol_options] = cowboy_args
 
     {ranch_module, cowboy_protocol, transport_opts} =
       case scheme do
@@ -282,30 +283,38 @@ defmodule Plug.Cowboy do
             |> Keyword.put_new(:next_protocols_advertised, ["h2", "http/1.1"])
             |> Keyword.put_new(:alpn_preferred_protocols, ["h2", "http/1.1"])
 
-          {:ranch_ssl, :cowboy_tls, %{transport_opts | socket_opts: socket_opts}}
+          IO.inspect({plug_opts, cowboy_opts})
+          {:ranch_ssl, protocol, %{transport_opts | socket_opts: socket_opts}}
       end
 
-    case :ranch.child_spec(ref, ranch_module, transport_opts, cowboy_protocol, proto_opts) do
-      {id, start, restart, shutdown, type, modules} ->
-        %{
-          id: id,
-          start: start,
-          restart: restart,
-          shutdown: shutdown,
-          type: type,
-          modules: modules
-        }
+    ret =
+      case :ranch.child_spec(ref, ranch_module, transport_opts, cowboy_protocol, protocol_options) do
+        {id, start, restart, shutdown, type, modules} ->
+          %{
+            id: id,
+            start: start,
+            restart: restart,
+            shutdown: shutdown,
+            type: type,
+            modules: modules
+          }
 
-      child_spec when is_map(child_spec) ->
-        child_spec
-    end
+        child_spec when is_map(child_spec) ->
+          child_spec
+      end
+
+    Logger.error("child_spec done #{inspect(ret)}")
+    ret
   end
 
   ## Helpers
 
+  @protocol :cowboy_tls
   @protocol_options [:compress, :stream_handlers]
 
   defp run(scheme, plug, opts, cowboy_options) do
+    IO.inspect(:watchoutnogood)
+
     case Application.ensure_all_started(:cowboy) do
       {:ok, _} ->
         nil
@@ -328,7 +337,10 @@ defmodule Plug.Cowboy do
       nil
     )
 
-    apply(:cowboy, start, args(scheme, plug, opts, cowboy_options))
+    cowboy_args = args(scheme, plug, opts, cowboy_options)
+    [ref, transport_opts, protocol, protocol_options] = cowboy_args
+    args = [ref, transport_opts, protocol_options]
+    apply(:cowboy, start, args)
   end
 
   defp normalize_cowboy_options(cowboy_options, :http) do
@@ -355,6 +367,7 @@ defmodule Plug.Cowboy do
     opts = Keyword.delete(opts, :otp_app)
     {ref, opts} = Keyword.pop(opts, :ref)
     {dispatch, opts} = Keyword.pop(opts, :dispatch)
+    {protocol, opts} = Keyword.pop(opts, :protocol, @protocol)
     {protocol_options, opts} = Keyword.pop(opts, :protocol_options, [])
 
     dispatch = :cowboy_router.compile(dispatch || dispatch_for(plug, plug_opts))
@@ -379,7 +392,7 @@ defmodule Plug.Cowboy do
       )
       |> Map.new()
 
-    [ref || build_ref(plug, scheme), transport_options, protocol_options]
+    [ref || build_ref(plug, scheme), transport_options, protocol, protocol_options]
   end
 
   @default_stream_handlers [:cowboy_telemetry_h, :cowboy_stream_h]
